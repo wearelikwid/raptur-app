@@ -26,9 +26,65 @@ jobs:
         pip install -r requirements.txt
         pip install pyinstaller
     
+    - name: Prepare native binaries for bundling
+      run: |
+        mkdir -p native_bins
+        
+        cp $(brew --prefix)/bin/ffmpeg native_bins/
+        cp $(brew --prefix)/bin/ffprobe native_bins/
+        cp $(brew --prefix)/bin/rubberband native_bins/
+        
+        mkdir -p native_libs
+        
+        for bin in native_bins/*; do
+          for lib in $(otool -L "$bin" | grep -E '/opt/homebrew|/usr/local' | awk '{print $1}'); do
+            if [ -f "$lib" ]; then
+              cp -n "$lib" native_libs/ 2>/dev/null || true
+            fi
+          done
+        done
+        
+        cp $(brew --prefix)/lib/librubberband*.dylib native_libs/ 2>/dev/null || true
+        cp $(brew --prefix)/lib/libsndfile*.dylib native_libs/ 2>/dev/null || true
+        cp $(brew --prefix)/lib/libsamplerate*.dylib native_libs/ 2>/dev/null || true
+        
+        echo "Native binaries prepared:"
+        ls -la native_bins/
+        echo "Native libraries:"
+        ls -la native_libs/
+    
     - name: Build macOS app with PyInstaller
       run: |
-        pyinstaller --name "Raptur" --onedir --windowed --collect-all streamlit --copy-metadata streamlit --collect-all librosa --collect-all pydub --collect-all pyloudnorm --collect-all pyrubberband --collect-all soundfile --hidden-import streamlit.runtime.scriptrunner.magic_funcs --add-data "app.py:." --add-data "attached_assets:attached_assets" run_raptur.py
+        pyinstaller \
+          --name "Raptur" \
+          --onedir \
+          --windowed \
+          --collect-all streamlit \
+          --copy-metadata streamlit \
+          --collect-all librosa \
+          --collect-all pydub \
+          --collect-all pyloudnorm \
+          --collect-all pyrubberband \
+          --collect-all soundfile \
+          --collect-all webview \
+          --collect-submodules webview.platforms \
+          --hidden-import streamlit.runtime.scriptrunner.magic_funcs \
+          --hidden-import webview.platforms.cocoa \
+          --hidden-import pyobjc \
+          --hidden-import objc \
+          --hidden-import Foundation \
+          --hidden-import AppKit \
+          --hidden-import WebKit \
+          --add-data "app.py:." \
+          --add-data "attached_assets:attached_assets" \
+          --add-binary "native_bins/ffmpeg:." \
+          --add-binary "native_bins/ffprobe:." \
+          --add-binary "native_bins/rubberband:." \
+          run_raptur.py
+        
+        cp native_libs/*.dylib dist/Raptur.app/Contents/MacOS/ 2>/dev/null || true
+        mkdir -p dist/Raptur.app/Contents/Frameworks
+        cp native_libs/*.dylib dist/Raptur.app/Contents/Frameworks/ 2>/dev/null || true
     
     - name: Create distribution zip
       run: |
