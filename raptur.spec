@@ -195,11 +195,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=['hook-runtime.py'],
-    excludes=[
-        'tkinter',
-        'unittest',
-        'pydoc',
-    ],
+    excludes=[],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
