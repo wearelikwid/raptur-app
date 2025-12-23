@@ -22,6 +22,8 @@ block_cipher = None
 # =============================================================================
 
 # X11 libraries to exclude (cause crashes on macOS)
+# These libraries cause hardened-runtime signature failures on macOS
+# The runtime hook (hook-runtime.py) patches PIL to not attempt loading these
 X11_EXCLUDE_PATTERNS = [
     'libxcb', 'libxau', 'libxdmcp', 'libx11', 'libxext', 'libxrender',
     'libxfixes', 'libxcursor', 'libxi', 'libxrandr', 'libxinerama',
