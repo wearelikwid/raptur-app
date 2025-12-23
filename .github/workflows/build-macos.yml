@@ -26,75 +26,155 @@ jobs:
         pip install -r requirements.txt
         pip install pyinstaller
     
-    - name: Prepare native binaries for bundling
+    - name: Stage native binaries for bundling
       run: |
+        echo "=== Staging native binaries ==="
         mkdir -p native_bins
         mkdir -p native_libs
         
-        # Copy main binaries
-        cp $(brew --prefix)/bin/ffmpeg native_bins/
-        cp $(brew --prefix)/bin/ffprobe native_bins/
-        cp $(brew --prefix)/bin/rubberband native_bins/
+        BREW_PREFIX=$(brew --prefix)
         
-        # Copy audio libraries
-        cp $(brew --prefix)/lib/librubberband*.dylib native_libs/ 2>/dev/null || true
-        cp $(brew --prefix)/lib/libsndfile*.dylib native_libs/ 2>/dev/null || true
-        cp $(brew --prefix)/lib/libsamplerate*.dylib native_libs/ 2>/dev/null || true
-        cp $(brew --prefix)/lib/libFLAC*.dylib native_libs/ 2>/dev/null || true
-        cp $(brew --prefix)/lib/libogg*.dylib native_libs/ 2>/dev/null || true
-        cp $(brew --prefix)/lib/libvorbis*.dylib native_libs/ 2>/dev/null || true
-        cp $(brew --prefix)/lib/libopus*.dylib native_libs/ 2>/dev/null || true
-        cp $(brew --prefix)/lib/libmp3lame*.dylib native_libs/ 2>/dev/null || true
+        # Copy main executables
+        cp "$BREW_PREFIX/bin/ffmpeg" native_bins/
+        cp "$BREW_PREFIX/bin/ffprobe" native_bins/
+        cp "$BREW_PREFIX/bin/rubberband" native_bins/
         
-        # Copy dependencies of native binaries
-        for bin in native_bins/*; do
-          for lib in $(otool -L "$bin" | grep -E '/opt/homebrew|/usr/local' | awk '{print $1}'); do
-            if [ -f "$lib" ]; then
+        echo "Staged executables:"
+        ls -la native_bins/
+        
+        # Function to copy library and its dependencies
+        copy_lib_with_deps() {
+          local lib="$1"
+          if [ -f "$lib" ]; then
+            local basename=$(basename "$lib")
+            # Skip X11 libraries
+            if [[ ! "$basename" =~ ^lib[Xx](11|cb|au|dmcp|ext|render|fixes|cursor|i\.|randr|inerama) ]]; then
               cp -n "$lib" native_libs/ 2>/dev/null || true
             fi
+          fi
+        }
+        
+        # Copy core audio libraries
+        for pattern in librubberband libsndfile libsamplerate libFLAC libogg libvorbis libopus libmp3lame libfftw; do
+          for lib in "$BREW_PREFIX"/lib/${pattern}*.dylib; do
+            copy_lib_with_deps "$lib"
           done
         done
         
-        echo "Native binaries prepared:"
-        ls -la native_bins/
-        echo "Native libraries:"
-        ls -la native_libs/ || echo "No native libs found"
+        # Get dependencies of ffmpeg and rubberband
+        for bin in native_bins/*; do
+          for dep in $(otool -L "$bin" 2>/dev/null | grep -E "$BREW_PREFIX" | awk '{print $1}'); do
+            copy_lib_with_deps "$dep"
+            # Also get transitive dependencies
+            for subdep in $(otool -L "$dep" 2>/dev/null | grep -E "$BREW_PREFIX" | awk '{print $1}'); do
+              copy_lib_with_deps "$subdep"
+            done
+          done
+        done
+        
+        echo "Staged libraries:"
+        ls -la native_libs/ || echo "No libraries staged"
+    
+    - name: Patch install names for relocatable binaries
+      run: |
+        echo "=== Patching install names ==="
+        
+        # Patch dylibs to use @loader_path
+        for lib in native_libs/*.dylib; do
+          if [ -f "$lib" ]; then
+            basename=$(basename "$lib")
+            
+            # Change the library's own ID
+            install_name_tool -id "@loader_path/$basename" "$lib" 2>/dev/null || true
+            
+            # Change references to other Homebrew libs
+            for dep in $(otool -L "$lib" 2>/dev/null | grep -E '/opt/homebrew|/usr/local' | awk '{print $1}'); do
+              depbase=$(basename "$dep")
+              install_name_tool -change "$dep" "@loader_path/$depbase" "$lib" 2>/dev/null || true
+            done
+          fi
+        done
+        
+        # Patch executables
+        for bin in native_bins/*; do
+          if [ -f "$bin" ]; then
+            for dep in $(otool -L "$bin" 2>/dev/null | grep -E '/opt/homebrew|/usr/local' | awk '{print $1}'); do
+              depbase=$(basename "$dep")
+              install_name_tool -change "$dep" "@executable_path/$depbase" "$bin" 2>/dev/null || true
+            done
+          fi
+        done
+        
+        echo "Install name patching complete"
     
     - name: Build macOS app with PyInstaller
       run: |
-        # Build using spec file plus native binaries
-        pyinstaller raptur.spec \
-          --add-binary "native_bins/ffmpeg:." \
-          --add-binary "native_bins/ffprobe:." \
-          --add-binary "native_bins/rubberband:."
+        echo "=== Building with PyInstaller ==="
+        # Just run pyinstaller with the spec file - no extra flags
+        pyinstaller raptur.spec
         
-        # Copy native libs to the app bundle
-        if [ -d "native_libs" ] && [ "$(ls -A native_libs)" ]; then
+        echo "Build complete. App structure:"
+        ls -la dist/
+        ls -la dist/Raptur.app/Contents/ || true
+        ls -la dist/Raptur.app/Contents/MacOS/ | head -20 || true
+    
+    - name: Copy staged libraries into app bundle
+      run: |
+        echo "=== Copying libraries to app bundle ==="
+        
+        # Copy dylibs to MacOS directory (same as executables)
+        if [ -d "native_libs" ] && [ "$(ls -A native_libs 2>/dev/null)" ]; then
           cp native_libs/*.dylib dist/Raptur.app/Contents/MacOS/ 2>/dev/null || true
-          mkdir -p dist/Raptur.app/Contents/Frameworks
-          cp native_libs/*.dylib dist/Raptur.app/Contents/Frameworks/ 2>/dev/null || true
+          echo "Copied libraries to Contents/MacOS/"
         fi
+        
+        # Also create Frameworks directory as fallback
+        mkdir -p dist/Raptur.app/Contents/Frameworks
+        if [ -d "native_libs" ] && [ "$(ls -A native_libs 2>/dev/null)" ]; then
+          cp native_libs/*.dylib dist/Raptur.app/Contents/Frameworks/ 2>/dev/null || true
+          echo "Copied libraries to Contents/Frameworks/"
+        fi
+        
+        echo "Final MacOS directory contents:"
+        ls -la dist/Raptur.app/Contents/MacOS/ | head -30
     
     - name: Ad-hoc code sign the app
       run: |
-        # Remove any existing signatures
+        echo "=== Code signing ==="
+        
+        # Remove any existing signatures first
         codesign --remove-signature dist/Raptur.app 2>/dev/null || true
         
-        # Sign all dylibs and binaries inside the app
+        # Sign all dylibs
         find dist/Raptur.app -name "*.dylib" -exec codesign --force --sign - {} \; 2>/dev/null || true
+        echo "Signed dylibs"
+        
+        # Sign all .so files
         find dist/Raptur.app -name "*.so" -exec codesign --force --sign - {} \; 2>/dev/null || true
-        find dist/Raptur.app/Contents/MacOS -type f -perm +111 -exec codesign --force --sign - {} \; 2>/dev/null || true
+        echo "Signed .so files"
+        
+        # Sign executables in MacOS directory
+        for exe in dist/Raptur.app/Contents/MacOS/*; do
+          if [ -f "$exe" ] && [ -x "$exe" ]; then
+            codesign --force --sign - "$exe" 2>/dev/null || true
+          fi
+        done
+        echo "Signed executables"
         
         # Sign the main app bundle
         codesign --force --deep --sign - dist/Raptur.app
+        echo "Signed app bundle"
         
-        echo "Code signing complete"
+        # Verify
+        codesign --verify --verbose dist/Raptur.app && echo "Code signature verified!" || echo "Code signature verification failed (may still work)"
     
     - name: Create distribution zip
       run: |
         cd dist
         zip -r Raptur-macOS.zip Raptur.app
         mv Raptur-macOS.zip ../
+        echo "Created Raptur-macOS.zip"
+        ls -lh ../Raptur-macOS.zip
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
