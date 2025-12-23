@@ -36,6 +36,17 @@ jobs:
         
         mkdir -p native_libs
         
+        # Copy rubberband and audio libraries
+        cp $(brew --prefix)/lib/librubberband*.dylib native_libs/ 2>/dev/null || true
+        cp $(brew --prefix)/lib/libsndfile*.dylib native_libs/ 2>/dev/null || true
+        cp $(brew --prefix)/lib/libsamplerate*.dylib native_libs/ 2>/dev/null || true
+        cp $(brew --prefix)/lib/libFLAC*.dylib native_libs/ 2>/dev/null || true
+        cp $(brew --prefix)/lib/libogg*.dylib native_libs/ 2>/dev/null || true
+        cp $(brew --prefix)/lib/libvorbis*.dylib native_libs/ 2>/dev/null || true
+        cp $(brew --prefix)/lib/libopus*.dylib native_libs/ 2>/dev/null || true
+        cp $(brew --prefix)/lib/libmp3lame*.dylib native_libs/ 2>/dev/null || true
+        
+        # Copy dependencies of native binaries
         for bin in native_bins/*; do
           for lib in $(otool -L "$bin" | grep -E '/opt/homebrew|/usr/local' | awk '{print $1}'); do
             if [ -f "$lib" ]; then
@@ -44,53 +55,37 @@ jobs:
           done
         done
         
-        cp $(brew --prefix)/lib/librubberband*.dylib native_libs/ 2>/dev/null || true
-        cp $(brew --prefix)/lib/libsndfile*.dylib native_libs/ 2>/dev/null || true
-        cp $(brew --prefix)/lib/libsamplerate*.dylib native_libs/ 2>/dev/null || true
-        
         echo "Native binaries prepared:"
         ls -la native_bins/
         echo "Native libraries:"
         ls -la native_libs/
     
-    - name: Build macOS app with PyInstaller
+    - name: Build macOS app with PyInstaller spec file
+      env:
+        NATIVE_BINS_PATH: native_bins
+        NATIVE_LIBS_PATH: native_libs
       run: |
-        pyinstaller \
-          --name "Raptur" \
-          --onedir \
-          --windowed \
-          --collect-all streamlit \
-          --copy-metadata streamlit \
-          --collect-all librosa \
-          --collect-all pydub \
-          --collect-all pyloudnorm \
-          --collect-all pyrubberband \
-          --collect-all soundfile \
-          --collect-all webview \
-          --collect-all mutagen \
-          --collect-all numpy \
-          --collect-all scipy \
-          --collect-all Pillow \
-          --collect-submodules webview.platforms \
-          --hidden-import streamlit.runtime.scriptrunner.magic_funcs \
-          --hidden-import webview.platforms.cocoa \
-          --hidden-import pyobjc \
-          --hidden-import objc \
-          --hidden-import Foundation \
-          --hidden-import AppKit \
-          --hidden-import WebKit \
-          --hidden-import mutagen.id3 \
-          --hidden-import mutagen.mp3 \
-          --add-data "app.py:." \
-          --add-data "attached_assets:attached_assets" \
-          --add-binary "native_bins/ffmpeg:." \
-          --add-binary "native_bins/ffprobe:." \
-          --add-binary "native_bins/rubberband:." \
-          run_raptur.py
+        pyinstaller raptur.spec
         
+        # Copy any remaining native libs to the app bundle
         cp native_libs/*.dylib dist/Raptur.app/Contents/MacOS/ 2>/dev/null || true
         mkdir -p dist/Raptur.app/Contents/Frameworks
         cp native_libs/*.dylib dist/Raptur.app/Contents/Frameworks/ 2>/dev/null || true
+    
+    - name: Ad-hoc code sign the app
+      run: |
+        # Remove any existing signatures and re-sign with ad-hoc
+        codesign --remove-signature dist/Raptur.app 2>/dev/null || true
+        
+        # Sign all dylibs and binaries inside the app
+        find dist/Raptur.app -name "*.dylib" -exec codesign --force --sign - {} \; 2>/dev/null || true
+        find dist/Raptur.app -name "*.so" -exec codesign --force --sign - {} \; 2>/dev/null || true
+        find dist/Raptur.app/Contents/MacOS -type f -perm +111 -exec codesign --force --sign - {} \; 2>/dev/null || true
+        
+        # Sign the main app bundle
+        codesign --force --deep --sign - dist/Raptur.app
+        
+        echo "Code signing complete"
     
     - name: Create distribution zip
       run: |
