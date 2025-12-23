@@ -8,3 +8,7 @@ pyloudnorm>=0.1.1
 pyrubberband>=0.4.0
 scipy>=1.11.0
 soundfile>=0.12.0
+pywebview>=5.0
+pyobjc>=10.0
+pyobjc-framework-Cocoa>=10.0
+pyobjc-framework-WebKit>=10.0
