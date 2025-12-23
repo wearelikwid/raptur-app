@@ -1,0 +1,44 @@
+name: Build Raptur for macOS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install Homebrew dependencies
+      run: |
+        brew install ffmpeg rubberband
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+    
+    - name: Build macOS app with PyInstaller
+      run: |
+        pyinstaller --name "Raptur" --onedir --windowed --collect-all streamlit --copy-metadata streamlit --collect-all librosa --collect-all pydub --collect-all pyloudnorm --collect-all pyrubberband --collect-all soundfile --hidden-import streamlit.runtime.scriptrunner.magic_funcs --add-data "app.py:." --add-data "attached_assets:attached_assets" run_raptur.py
+    
+    - name: Create distribution zip
+      run: |
+        cd dist
+        zip -r Raptur-macOS.zip Raptur.app
+        mv Raptur-macOS.zip ../
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Raptur-macOS
+        path: Raptur-macOS.zip
+        retention-days: 30
