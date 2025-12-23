@@ -4,65 +4,106 @@ Raptur PyInstaller Spec File
 Handles macOS-specific bundling issues including:
 - Filtering out X11 libraries (libxcb, libXau, libXdmcp) that cause Pillow crashes
 - Collecting all audio processing dependencies
-- Bundling native binaries (ffmpeg, rubberband)
 - Proper pywebview/pyobjc integration
 """
 
+from PyInstaller.utils.hooks import collect_all, copy_metadata
 import sys
 import os
 
 block_cipher = None
 
-# Paths to native binaries (set by GitHub Actions)
-native_bins_path = os.environ.get('NATIVE_BINS_PATH', 'native_bins')
-native_libs_path = os.environ.get('NATIVE_LIBS_PATH', 'native_libs')
+# X11 libraries to exclude (cause Pillow crashes on macOS)
+x11_libs_to_exclude = ['libxcb', 'libxau', 'libxdmcp', 'libx11']
 
-# Build binary list for native tools
-binaries = []
-if os.path.exists(native_bins_path):
-    for binary in ['ffmpeg', 'ffprobe', 'rubberband']:
-        binary_path = os.path.join(native_bins_path, binary)
-        if os.path.exists(binary_path):
-            binaries.append((binary_path, '.'))
+def filter_x11_binaries(binaries_list):
+    """Filter out X11-related libraries that crash on macOS."""
+    return [
+        (name, path, typecode) 
+        for name, path, typecode in binaries_list 
+        if not any(x in name.lower() for x in x11_libs_to_exclude)
+    ]
 
-# Add native libraries
-if os.path.exists(native_libs_path):
-    for lib in os.listdir(native_libs_path):
-        if lib.endswith('.dylib'):
-            binaries.append((os.path.join(native_libs_path, lib), '.'))
+# Start with empty collections
+all_datas = [
+    ('app.py', '.'),
+    ('attached_assets', 'attached_assets'),
+]
+all_binaries = []
+all_hiddenimports = [
+    'streamlit.runtime.scriptrunner.magic_funcs',
+    'webview.platforms.cocoa',
+    'pyobjc',
+    'objc',
+    'Foundation',
+    'AppKit',
+    'WebKit',
+    'mutagen.id3',
+    'mutagen.mp3',
+    'scipy.signal',
+    'scipy.fft',
+    'numpy.core._methods',
+    'numpy.lib.format',
+    'soundfile',
+]
+
+# Collect streamlit with metadata
+try:
+    datas, binaries, hiddenimports = collect_all('streamlit')
+    all_datas += datas
+    all_datas += copy_metadata('streamlit')
+    all_binaries += filter_x11_binaries(binaries)
+    all_hiddenimports += hiddenimports
+except Exception as e:
+    print(f"Warning: Could not collect streamlit: {e}")
+
+# Collect audio libraries
+audio_packages = ['librosa', 'pydub', 'pyloudnorm', 'pyrubberband', 'soundfile', 'mutagen']
+for pkg in audio_packages:
+    try:
+        datas, binaries, hiddenimports = collect_all(pkg)
+        all_datas += datas
+        all_binaries += filter_x11_binaries(binaries)
+        all_hiddenimports += hiddenimports
+    except Exception as e:
+        print(f"Warning: Could not collect {pkg}: {e}")
+
+# Collect numpy and scipy
+for pkg in ['numpy', 'scipy']:
+    try:
+        datas, binaries, hiddenimports = collect_all(pkg)
+        all_datas += datas
+        all_binaries += filter_x11_binaries(binaries)
+        all_hiddenimports += hiddenimports
+    except Exception as e:
+        print(f"Warning: Could not collect {pkg}: {e}")
+
+# Collect PIL/Pillow (filter X11 libs)
+try:
+    from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+    # Use individual collectors for Pillow since collect_all may fail
+    pillow_datas = collect_data_files('PIL')
+    pillow_binaries = collect_dynamic_libs('PIL')
+    all_datas += pillow_datas
+    all_binaries += filter_x11_binaries(pillow_binaries)
+except Exception as e:
+    print(f"Warning: Could not collect PIL: {e}")
+
+# Collect pywebview
+try:
+    datas, binaries, hiddenimports = collect_all('webview')
+    all_datas += datas
+    all_binaries += binaries
+    all_hiddenimports += hiddenimports
+except Exception as e:
+    print(f"Warning: Could not collect webview: {e}")
 
 a = Analysis(
     ['run_raptur.py'],
     pathex=[],
-    binaries=binaries,
-    datas=[
-        ('app.py', '.'),
-        ('attached_assets', 'attached_assets'),
-    ],
-    hiddenimports=[
-        # Streamlit internals
-        'streamlit.runtime.scriptrunner.magic_funcs',
-        # pywebview/pyobjc for native window
-        'webview.platforms.cocoa',
-        'pyobjc',
-        'objc',
-        'Foundation',
-        'AppKit',
-        'WebKit',
-        # mutagen for MP3 metadata
-        'mutagen.id3',
-        'mutagen.mp3',
-        # scipy signal processing
-        'scipy.signal',
-        'scipy.fft',
-        # numpy internals
-        'numpy.core._methods',
-        'numpy.lib.format',
-        # librosa internals
-        'librosa.util.decorators',
-        # soundfile internals
-        'soundfile',
-    ],
+    binaries=all_binaries,
+    datas=all_datas,
+    hiddenimports=all_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -73,62 +114,8 @@ a = Analysis(
     noarchive=False,
 )
 
-# CRITICAL: Filter out X11 libraries that cause Pillow to crash on macOS
-# These libraries (libxcb, libXau, libXdmcp) are only needed for X11 screenshot
-# support which doesn't work on macOS anyway (macOS uses Quartz)
-x11_libs_to_exclude = ['libxcb', 'libxau', 'libxdmcp', 'libx11']
-a.binaries = [
-    (name, path, type_) 
-    for name, path, type_ in a.binaries 
-    if not any(x in name.lower() for x in x11_libs_to_exclude)
-]
-
-# Collect all data and binaries from key packages
-from PyInstaller.utils.hooks import collect_all, copy_metadata
-
-# Streamlit
-datas_streamlit, binaries_streamlit, hiddenimports_streamlit = collect_all('streamlit')
-a.datas += datas_streamlit
-a.binaries += binaries_streamlit
-a.hiddenimports += hiddenimports_streamlit
-a.datas += copy_metadata('streamlit')
-
-# Audio libraries
-for pkg in ['librosa', 'pydub', 'pyloudnorm', 'pyrubberband', 'soundfile', 'mutagen', 'scipy']:
-    try:
-        datas, binaries_pkg, hiddenimports = collect_all(pkg)
-        a.datas += datas
-        # Filter X11 libs from each package too
-        a.binaries += [
-            (n, p, t) for n, p, t in binaries_pkg
-            if not any(x in n.lower() for x in x11_libs_to_exclude)
-        ]
-        a.hiddenimports += hiddenimports
-    except Exception:
-        pass
-
-# NumPy and Pillow (with X11 filtering)
-for pkg in ['numpy', 'Pillow']:
-    try:
-        datas, binaries_pkg, hiddenimports = collect_all(pkg)
-        a.datas += datas
-        # Filter X11 libs
-        a.binaries += [
-            (n, p, t) for n, p, t in binaries_pkg
-            if not any(x in n.lower() for x in x11_libs_to_exclude)
-        ]
-        a.hiddenimports += hiddenimports
-    except Exception:
-        pass
-
-# pywebview
-try:
-    datas_webview, binaries_webview, hiddenimports_webview = collect_all('webview')
-    a.datas += datas_webview
-    a.binaries += binaries_webview
-    a.hiddenimports += hiddenimports_webview
-except Exception:
-    pass
+# Additional X11 filtering on the final binaries list
+a.binaries = filter_x11_binaries(a.binaries)
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
@@ -141,8 +128,8 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,  # UPX can break dylibs on macOS
-    console=False,  # Windowed app
+    upx=False,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
