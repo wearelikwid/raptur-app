@@ -1,0 +1,119 @@
+1. Add the Filter Functions (The Math)
+Paste this block before your create_streaming_mix function.
+
+Python
+
+from scipy import signal
+
+def butter_highpass_filter(data, cutoff, fs, order=2):
+    nyq = 0.5 * fs
+    normal_cutoff = cutoff / nyq
+    b, a = signal.butter(order, normal_cutoff, btype='high', analog=False)
+    # Apply filter along time axis (axis 1 for stereo array [2, samples])
+    y = signal.filtfilt(b, a, data, axis=1)
+    return y
+
+def butter_lowpass_filter(data, cutoff, fs, order=2):
+    nyq = 0.5 * fs
+    normal_cutoff = cutoff / nyq
+    b, a = signal.butter(order, normal_cutoff, btype='low', analog=False)
+    y = signal.filtfilt(b, a, data, axis=1)
+    return y
+
+def apply_fx_transition(audio_a, audio_b, overlap_len, sr, fx_type="crossfade"):
+    """Applies a specific DJ FX to the transition region."""
+    
+    # 1. Standard Linear Fades (Base)
+    fade_out = np.linspace(1.0, 0.0, overlap_len, dtype=np.float32)
+    fade_in = np.linspace(0.0, 1.0, overlap_len, dtype=np.float32)
+    
+    # OUTPUT BUFFERS
+    out_a = audio_a.copy()
+    out_b = audio_b.copy()
+
+    if fx_type == "filter_sweep":
+        # EFFECT: High-Pass Filter sweep on Track A (Remove Bass as it leaves)
+        # We simulate a knob twist by increasing cutoff freq over time? 
+        # Actually, simpler: Just High-Pass Track A during the transition.
+        # Cutoff = 300Hz (Removes Kick/Sub)
+        out_a = butter_highpass_filter(out_a, 300, sr)
+        
+    elif fx_type == "bass_swap":
+        # EFFECT: Hard cut bass of A, blend highs.
+        # Low-pass A (keep bass) -> Fade out FAST
+        # High-pass A (keep highs) -> Fade out SLOW
+        # This is complex in standard Numpy. 
+        # SIMPLIFIED BASS SWAP: 
+        # Just High-Pass Track A immediately at start of transition.
+        out_a = butter_highpass_filter(out_a, 250, sr)
+        # Track B comes in full.
+        
+    # Apply Fades (Standard Crossfade logic applies to the filtered audio)
+    out_a = out_a * fade_out
+    out_b = out_b * fade_in
+    
+    return out_a + out_b
+2. Update the Mixer Loop
+Now, modify the loop inside create_streaming_mix to pick a random effect.
+
+Python
+
+import random
+
+def create_streaming_mix(tracks_metadata, target_bpm, transition_beats=32, progress_callback=None):
+    # ... (Setup code same as before) ...
+
+    # LOOP
+        # ... (Time stretching code same as before) ...
+        
+        # TRANSITION LOGIC
+        if i == 0:
+            mixed_left = y_stretched[0].astype(np.float32)
+            mixed_right = y_stretched[1].astype(np.float32)
+        else:
+            # Randomly choose an effect for this transition
+            # 60% Chance of standard Crossfade
+            # 20% Filter Sweep
+            # 20% Bass Swap
+            fx_choice = random.choices(
+                ["crossfade", "filter_sweep", "bass_swap"], 
+                weights=[0.6, 0.2, 0.2], k=1
+            )[0]
+            
+            if progress_callback:
+                progress_callback(f"Mixing {track_meta['name']} (FX: {fx_choice})...")
+
+            overlap_samples = min(transition_samples, len(mixed_left), len(y_stretched[0]))
+            
+            # Extract the overlapping segments
+            segment_a = np.array([
+                mixed_left[-overlap_samples:], 
+                mixed_right[-overlap_samples:]
+            ])
+            
+            segment_b = np.array([
+                y_stretched[0][:overlap_samples], 
+                y_stretched[1][:overlap_samples]
+            ])
+            
+            # APPLY THE FX FUNCTION
+            # Note: We need to pass the segment, not the full array
+            mixed_segment = apply_fx_transition(segment_a, segment_b, overlap_samples, sr, fx_type=fx_choice)
+            
+            # Stitch it back together
+            # 1. Cut the tail of the existing mix
+            mixed_left = mixed_left[:-overlap_samples]
+            mixed_right = mixed_right[:-overlap_samples]
+            
+            # 2. Append the FX transition
+            mixed_left = np.concatenate([mixed_left, mixed_segment[0]])
+            mixed_right = np.concatenate([mixed_right, mixed_segment[1]])
+            
+            # 3. Append the rest of the new track
+            remainder_left = y_stretched[0][overlap_samples:].astype(np.float32)
+            remainder_right = y_stretched[1][overlap_samples:].astype(np.float32)
+            
+            mixed_left = np.concatenate([mixed_left, remainder_left])
+            mixed_right = np.concatenate([mixed_right, remainder_right])
+
+        # ... (Garbage collection code same as before) ...

@@ -1,0 +1,70 @@
+Project Update: Implement "Smart Phrasing" (Content-Aware Transitions)
+
+I need to upgrade the mixing engine to be "Content-Aware." Currently, we use a fixed transition length (e.g., 16 beats), which causes vocal clashes if a track has a short intro.
+
+Goal: The system must analyze where the vocals start/end and dynamically resize the transition window to fit perfectly into the "Safe Zones" (Drum-only sections).
+
+Task 1: Create analyze_structural_safe_zones(y, sr)
+
+Step A (Separate): Use y_harm, y_perc = librosa.effects.hpss(y). We only care about y_harm (Harmonic energy = Vocals/Melody).
+
+Step B (Energy Scan):
+
+Calculate RMS energy of y_harm using frame windows (e.g., 1-second chunks).
+
+Normalize the energy (0.0 to 1.0).
+
+Set a vocal_threshold = 0.15 (Harmonic energy above this likely means vocals or heavy synths).
+
+Step C (Find Intro Length):
+
+Scan from 0s forward. Find the timestamp where energy consistently exceeds the threshold.
+
+This duration is intro_safe_zone.
+
+Step D (Find Outro Length):
+
+Scan from the end backwards. Find the timestamp where energy consistently rises above the threshold.
+
+The duration from that point to the end is outro_safe_zone.
+
+Return: A tuple (intro_safe_zone_sec, outro_safe_zone_sec).
+
+Task 2: Integrate into load_and_sanitize
+
+Call analyze_structural_safe_zones on the finalized audio.
+
+Return these two values along with the other metadata (bpm, key, etc.).
+
+Task 3: Update create_streaming_mix with Dynamic Logic
+
+Remove the fixed transition_beats parameter usage.
+
+Inside the mixing loop, calculate the overlap for each pair:
+
+track_a_outro = Metadata from Track A.
+
+track_b_intro = Metadata from Track B.
+
+available_window = min(track_a_outro, track_b_intro).
+
+Apply "DJ Logic" Constraints:
+
+Constraint 1 (Grid Snap): Convert available_window to beats. Round it down to the nearest 8 or 4 beats (e.g., if window is 15.5 beats, snap to 12 or 8). Beatmatching requires integer beats!
+
+Constraint 2 (Safety Floor): If the window is < 4 seconds (vocals start immediately), default to a fast 4-beat cut (hard transition) to avoid clashing.
+
+Constraint 3 (Ceiling): Cap at 32 beats (don't do 2-minute transitions).
+
+Execution: Use this calculated dynamic overlap_samples for the apply_fx_transition function.
+
+What happens now?
+The Analysis: When you upload Song_A.mp3, the bot quietly splits it, listens to the Harmonic layer, and realizes: "Vocals end 45 seconds before the track finishes."
+
+The Decision: When mixing into Song_B.mp3 (which has a 30-second drum intro), the bot calculates: Min(45s, 30s) = 30s.
+
+The Result: It creates a 30-second smooth transition.
+
+The Edge Case: If Song_C starts singing at 0:02, the bot calculates Min(45s, 2s) = 2s. It forces a Fast Cut so the vocals don't overlap.
+
+This gives you the "Intelligence" of a human DJ reading the waveforms.
