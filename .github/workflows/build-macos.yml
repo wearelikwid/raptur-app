@@ -67,6 +67,10 @@ jobs:
           --collect-all pyrubberband \
           --collect-all soundfile \
           --collect-all webview \
+          --collect-all mutagen \
+          --collect-all numpy \
+          --collect-all scipy \
+          --collect-all Pillow \
           --collect-submodules webview.platforms \
           --hidden-import streamlit.runtime.scriptrunner.magic_funcs \
           --hidden-import webview.platforms.cocoa \
@@ -75,6 +79,8 @@ jobs:
           --hidden-import Foundation \
           --hidden-import AppKit \
           --hidden-import WebKit \
+          --hidden-import mutagen.id3 \
+          --hidden-import mutagen.mp3 \
           --add-data "app.py:." \
           --add-data "attached_assets:attached_assets" \
           --add-binary "native_bins/ffmpeg:." \
