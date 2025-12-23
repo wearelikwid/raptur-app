@@ -25,9 +25,9 @@ jobs:
         python -m pip install --upgrade pip
         
         # Install Pillow from source WITHOUT X11/XCB support
-        # This prevents the libxcb ImportError on macOS
-        # GitHub Actions macOS runners don't have XQuartz, so X11 is auto-disabled
-        pip install --no-binary pillow pillow>=11.0.0
+        # PILLOW_DISABLE_XCB=1 explicitly disables XCB support during build
+        # This prevents the libxcb ImportError on macOS even if X11 headers are found
+        PILLOW_DISABLE_XCB=1 pip install --no-binary pillow pillow>=11.0.0
         
         # Install remaining dependencies
         pip install -r requirements.txt
