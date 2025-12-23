@@ -1,36 +1,52 @@
 """
 Raptur Desktop Launcher
 Uses pywebview to create a native window containing the Streamlit UI.
-Includes single-instance protection and clean process lifecycle management.
+Runs Streamlit via streamlit.web.bootstrap.run() in a multiprocessing.Process
+to work correctly inside a frozen PyInstaller bundle.
 """
 import os
 import sys
 import time
 import socket
-import fcntl
 import tempfile
 import threading
-import subprocess
 import http.client
 import multiprocessing
 from pathlib import Path
 
+# macOS requires 'spawn' method for multiprocessing in frozen apps
+if sys.platform == "darwin":
+    multiprocessing.set_start_method("spawn", force=True)
+
 import webview
 
 LOCK_PATH = Path(tempfile.gettempdir()) / "raptur_launcher.lock"
-STREAMLIT_BOOT_TIMEOUT = 60
+STREAMLIT_BOOT_TIMEOUT = 90
 
 
 def acquire_lock():
-    """Prevent multiple instances of the app from running simultaneously."""
-    lock_file = open(LOCK_PATH, "w")
+    """Prevent multiple instances using a simple PID-based lock file."""
     try:
-        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        lock_file.write(str(os.getpid()))
-        lock_file.flush()
-    except BlockingIOError:
-        raise SystemExit("Raptur is already running. Close the existing window first.")
-    return lock_file
+        if LOCK_PATH.exists():
+            old_pid = LOCK_PATH.read_text().strip()
+            try:
+                os.kill(int(old_pid), 0)
+                raise SystemExit("Raptur is already running. Close the existing window first.")
+            except (ProcessLookupError, ValueError):
+                pass
+        LOCK_PATH.write_text(str(os.getpid()))
+    except Exception as e:
+        if "already running" in str(e):
+            raise
+        pass
+
+
+def release_lock():
+    """Remove the lock file on shutdown."""
+    try:
+        LOCK_PATH.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 def find_free_port():
@@ -49,27 +65,31 @@ def get_app_path():
     return os.path.join(base_path, "app.py")
 
 
-def start_streamlit(port):
-    """Start the Streamlit server as a subprocess."""
-    env = os.environ.copy()
-    env.update({
-        "STREAMLIT_SERVER_PORT": str(port),
-        "STREAMLIT_SERVER_HEADLESS": "true",
-        "STREAMLIT_BROWSER_GATHER_USAGE_STATS": "false",
-    })
-    return subprocess.Popen([
-        sys.executable,
-        "-m",
-        "streamlit",
-        "run",
-        get_app_path(),
-        "--server.headless",
-        "true",
-        "--server.port",
-        str(port),
-        "--browser.gatherUsageStats",
-        "false",
-    ], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def run_streamlit_server(app_path, port):
+    """
+    Target function for multiprocessing.Process.
+    Runs Streamlit using bootstrap.run() directly - works in frozen PyInstaller apps.
+    """
+    import streamlit.web.bootstrap as bootstrap
+    
+    flag_options = {
+        "server.port": port,
+        "server.address": "127.0.0.1",
+        "server.headless": True,
+        "server.fileWatcherType": "none",
+        "browser.gatherUsageStats": False,
+        "global.developmentMode": False,
+    }
+    
+    bootstrap.load_config_options(flag_options=flag_options)
+    flag_options["_is_running_with_streamlit"] = True
+    
+    bootstrap.run(
+        app_path,
+        "streamlit run",
+        [],
+        flag_options
+    )
 
 
 def wait_for_server(port):
@@ -79,10 +99,12 @@ def wait_for_server(port):
         try:
             conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
             conn.request("GET", "/")
-            if conn.getresponse().status < 500:
+            resp = conn.getresponse()
+            if resp.status < 500:
                 return True
         except Exception:
-            time.sleep(0.5)
+            pass
+        time.sleep(0.5)
     return False
 
 
@@ -90,26 +112,33 @@ def launch_window(url, process):
     """Create and launch the native window with the Streamlit UI."""
     window_destroyed = threading.Event()
     
+    def cleanup_process():
+        """Terminate the Streamlit process."""
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=10)
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=5)
+
     def on_closed():
         """Clean up when the window is closed."""
         window_destroyed.set()
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
+        cleanup_process()
 
     def monitor_process():
         """Watch the Streamlit process and close window if it dies."""
-        process.wait()
+        process.join()
         if not window_destroyed.is_set():
             for window in webview.windows:
-                window.destroy()
+                try:
+                    window.destroy()
+                except Exception:
+                    pass
 
     threading.Thread(target=monitor_process, daemon=True).start()
     
-    window = webview.create_window(
+    webview.create_window(
         "Raptur",
         url,
         width=1200,
@@ -126,16 +155,28 @@ def main():
     """Main entry point for the desktop app."""
     multiprocessing.freeze_support()
     
-    lock_file = acquire_lock()
+    acquire_lock()
     port = find_free_port()
     process = None
     
     try:
         print(f"Starting Raptur on port {port}...")
-        process = start_streamlit(port)
+        
+        app_path = get_app_path()
+        print(f"App path: {app_path}")
+        
+        process = multiprocessing.Process(
+            target=run_streamlit_server,
+            args=(app_path, port),
+            daemon=True
+        )
+        process.start()
         
         print("Waiting for server to be ready...")
         if not wait_for_server(port):
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
             raise SystemExit("Streamlit server failed to start within timeout.")
         
         print("Launching window...")
@@ -144,17 +185,12 @@ def main():
     except KeyboardInterrupt:
         print("\nShutting down Raptur...")
     finally:
-        if process and process.poll() is None:
+        if process and process.is_alive():
             process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
+            process.join(timeout=5)
+            if process.is_alive():
                 process.kill()
-        lock_file.close()
-        try:
-            LOCK_PATH.unlink(missing_ok=True)
-        except Exception:
-            pass
+        release_lock()
 
 
 if __name__ == "__main__":
