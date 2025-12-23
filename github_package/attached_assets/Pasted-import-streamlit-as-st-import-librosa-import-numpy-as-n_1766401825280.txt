@@ -1,0 +1,256 @@
+import streamlit as st
+import librosa
+import numpy as np
+import soundfile as sf
+import pyrubberband as pyrb
+from pydub import AudioSegment
+import tempfile
+import os
+import io
+from pathlib import Path
+
+st.set_page_config(page_title="Auto-DJ Mixer", page_icon="🎧", layout="wide")
+
+st.title("🎧 Local Auto-DJ with Silence Scrubbing")
+st.markdown("Upload MP3/WAV files, remove silence, sort by BPM, and generate a beatmatched mix!")
+
+def load_and_trim_silence(file_path, top_db=20):
+    """Load audio file and trim leading/trailing silence."""
+    y, sr = librosa.load(file_path, sr=None, mono=False)
+    if y.ndim == 1:
+        y = np.array([y, y])
+    y_mono = librosa.to_mono(y)
+    _, index = librosa.effects.trim(y_mono, top_db=top_db)
+    y_trimmed = y[:, index[0]:index[1]]
+    return y_trimmed, sr
+
+def analyze_bpm(y, sr):
+    """Analyze BPM using librosa beat tracking."""
+    y_mono = librosa.to_mono(y) if y.ndim > 1 else y
+    tempo, _ = librosa.beat.beat_track(y=y_mono, sr=sr)
+    if hasattr(tempo, '__len__'):
+        tempo = float(tempo[0])
+    tempo = float(tempo)
+    if tempo <= 0 or tempo > 300:
+        tempo = 120.0
+    return tempo
+
+def time_stretch_audio(y, sr, original_bpm, target_bpm):
+    """Time stretch audio to match target BPM using rubberband."""
+    if original_bpm <= 0 or target_bpm <= 0:
+        return y
+    if abs(original_bpm - target_bpm) < 0.5:
+        return y
+    stretch_ratio = target_bpm / original_bpm
+    if stretch_ratio < 0.5 or stretch_ratio > 2.0:
+        return y
+    if y.ndim == 1:
+        y_stretched = pyrb.time_stretch(y, sr, stretch_ratio)
+    else:
+        channels = []
+        for i in range(y.shape[0]):
+            stretched = pyrb.time_stretch(y[i], sr, stretch_ratio)
+            channels.append(stretched)
+        y_stretched = np.array(channels)
+    return y_stretched
+
+def calculate_beat_samples(bpm, sr, num_beats):
+    """Calculate number of samples for given number of beats."""
+    seconds_per_beat = 60.0 / bpm
+    samples = int(seconds_per_beat * num_beats * sr)
+    return samples
+
+def create_crossfade_mix(tracks_data, target_bpm, transition_beats=16, progress_callback=None):
+    """Create a continuous mix with crossfade transitions."""
+    if not tracks_data:
+        return None, None
+    
+    first_track = tracks_data[0]
+    sr = first_track['sr']
+    
+    mixed_left = np.array([], dtype=np.float32)
+    mixed_right = np.array([], dtype=np.float32)
+    
+    for i, track in enumerate(tracks_data):
+        if progress_callback:
+            progress_callback(f"Processing track {i+1}/{len(tracks_data)}: {track['name']}")
+        
+        y = track['audio']
+        original_bpm = track['bpm']
+        
+        y_stretched = time_stretch_audio(y, sr, original_bpm, target_bpm)
+        
+        if y_stretched.ndim == 1:
+            y_stretched = np.array([y_stretched, y_stretched])
+        
+        transition_samples = calculate_beat_samples(target_bpm, sr, transition_beats)
+        
+        if i == 0:
+            mixed_left = y_stretched[0].astype(np.float32)
+            mixed_right = y_stretched[1].astype(np.float32)
+        else:
+            overlap_samples = min(transition_samples, len(mixed_left), len(y_stretched[0]))
+            
+            fade_out = np.linspace(1.0, 0.0, overlap_samples, dtype=np.float32)
+            fade_in = np.linspace(0.0, 1.0, overlap_samples, dtype=np.float32)
+            
+            overlap_a_left = mixed_left[-overlap_samples:] * fade_out
+            overlap_a_right = mixed_right[-overlap_samples:] * fade_out
+            
+            overlap_b_left = y_stretched[0][:overlap_samples].astype(np.float32) * fade_in
+            overlap_b_right = y_stretched[1][:overlap_samples].astype(np.float32) * fade_in
+            
+            crossfaded_left = overlap_a_left + overlap_b_left
+            crossfaded_right = overlap_a_right + overlap_b_right
+            
+            remainder_left = y_stretched[0][overlap_samples:].astype(np.float32)
+            remainder_right = y_stretched[1][overlap_samples:].astype(np.float32)
+            
+            mixed_left = np.concatenate([mixed_left[:-overlap_samples], crossfaded_left, remainder_left])
+            mixed_right = np.concatenate([mixed_right[:-overlap_samples], crossfaded_right, remainder_right])
+    
+    final_audio = np.array([mixed_left, mixed_right])
+    
+    max_val = np.max(np.abs(final_audio))
+    if max_val > 0.99:
+        final_audio = final_audio * 0.95 / max_val
+    
+    return final_audio, sr
+
+def process_uploaded_files(uploaded_files, progress_bar, status_text):
+    """Process uploaded files: save, trim silence, analyze BPM."""
+    tracks_data = []
+    temp_dir = tempfile.mkdtemp()
+    
+    for i, uploaded_file in enumerate(uploaded_files):
+        progress = (i + 1) / len(uploaded_files) * 0.5
+        progress_bar.progress(progress)
+        status_text.text(f"Processing: {uploaded_file.name}")
+        
+        file_path = os.path.join(temp_dir, uploaded_file.name)
+        with open(file_path, 'wb') as f:
+            f.write(uploaded_file.getbuffer())
+        
+        try:
+            status_text.text(f"Removing silence from: {uploaded_file.name}")
+            y_trimmed, sr = load_and_trim_silence(file_path)
+            
+            status_text.text(f"Analyzing BPM for: {uploaded_file.name}")
+            bpm = analyze_bpm(y_trimmed, sr)
+            
+            tracks_data.append({
+                'name': uploaded_file.name,
+                'audio': y_trimmed,
+                'sr': sr,
+                'bpm': bpm,
+                'duration': y_trimmed.shape[1] / sr if y_trimmed.ndim > 1 else len(y_trimmed) / sr
+            })
+            
+        except Exception as e:
+            st.error(f"Error processing {uploaded_file.name}: {str(e)}")
+            continue
+    
+    for f in os.listdir(temp_dir):
+        os.remove(os.path.join(temp_dir, f))
+    os.rmdir(temp_dir)
+    
+    return tracks_data
+
+uploaded_files = st.file_uploader(
+    "Upload MP3/WAV files",
+    type=['mp3', 'wav'],
+    accept_multiple_files=True,
+    help="Select multiple audio files to create a continuous mix"
+)
+
+if uploaded_files:
+    st.info(f"📁 {len(uploaded_files)} file(s) uploaded")
+    
+    if st.button("🎛️ Generate Mix", type="primary", use_container_width=True):
+        if len(uploaded_files) < 2:
+            st.warning("Please upload at least 2 files to create a mix.")
+        else:
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            with st.spinner("Processing files..."):
+                status_text.text("Loading and trimming silence...")
+                tracks_data = process_uploaded_files(uploaded_files, progress_bar, status_text)
+            
+            if len(tracks_data) >= 2:
+                status_text.text("Sorting tracks by BPM...")
+                tracks_data.sort(key=lambda x: x['bpm'])
+                
+                st.subheader("📊 Track Analysis (Sorted by BPM)")
+                for i, track in enumerate(tracks_data):
+                    col1, col2, col3 = st.columns([3, 1, 1])
+                    with col1:
+                        st.write(f"**{i+1}. {track['name']}**")
+                    with col2:
+                        st.write(f"🎵 {track['bpm']:.1f} BPM")
+                    with col3:
+                        st.write(f"⏱️ {track['duration']:.1f}s")
+                
+                average_bpm = sum(t['bpm'] for t in tracks_data) / len(tracks_data)
+                st.info(f"🎯 Target BPM (Average): {average_bpm:.1f}")
+                
+                status_text.text("Creating beatmatched mix...")
+                progress_bar.progress(0.6)
+                
+                def update_progress(msg):
+                    status_text.text(msg)
+                
+                mixed_audio, sr = create_crossfade_mix(
+                    tracks_data, 
+                    average_bpm, 
+                    transition_beats=16,
+                    progress_callback=update_progress
+                )
+                
+                if mixed_audio is not None:
+                    progress_bar.progress(0.9)
+                    status_text.text("Exporting mix...")
+                    
+                    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_wav:
+                        tmp_wav_path = tmp_wav.name
+                        sf.write(tmp_wav_path, mixed_audio.T, sr)
+                    
+                    audio_segment = AudioSegment.from_wav(tmp_wav_path)
+                    
+                    mp3_buffer = io.BytesIO()
+                    audio_segment.export(mp3_buffer, format='mp3', bitrate='320k')
+                    mp3_buffer.seek(0)
+                    
+                    os.unlink(tmp_wav_path)
+                    
+                    progress_bar.progress(1.0)
+                    status_text.text("Mix complete!")
+                    
+                    st.success("✅ Mix generated successfully!")
+                    
+                    total_duration = sum(t['duration'] for t in tracks_data)
+                    st.write(f"📊 **Mix Stats:** {len(tracks_data)} tracks | {total_duration/60:.1f} min total source | Target: {average_bpm:.1f} BPM")
+                    
+                    st.download_button(
+                        label="⬇️ Download Full_Mix.mp3",
+                        data=mp3_buffer,
+                        file_name="Full_Mix.mp3",
+                        mime="audio/mpeg",
+                        type="primary",
+                        use_container_width=True
+                    )
+                else:
+                    st.error("Failed to create mix.")
+            else:
+                st.error("Not enough valid tracks to create a mix.")
+
+st.markdown("---")
+st.markdown("""
+### How it works:
+1. **Upload** multiple MP3 or WAV files
+2. **Silence Scrubbing**: Leading/trailing silence is automatically removed
+3. **BPM Analysis**: Each track is analyzed for tempo
+4. **Smart Sorting**: Tracks are arranged by BPM (low to high)
+5. **Beatmatched Mixing**: 16-beat crossfade transitions at average BPM
+6. **Export**: Download your continuous mix as MP3
+""")
