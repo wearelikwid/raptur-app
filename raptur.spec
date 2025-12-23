@@ -198,7 +198,6 @@ a = Analysis(
     excludes=[
         'tkinter',
         'unittest',
-        'xml',
         'pydoc',
     ],
     win_no_prefer_redirects=False,
