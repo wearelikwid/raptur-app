@@ -1085,14 +1085,23 @@ if uploaded_files:
                             if not safe_filename:
                                 safe_filename = "Mix"
                             
-                            st.download_button(
-                                label=f"⬇️ Download {safe_filename}.mp3",
-                                data=mp3_buffer,
-                                file_name=f"{safe_filename}.mp3",
-                                mime="audio/mpeg",
-                                type="primary",
-                                use_container_width=True
-                            )
+                            # Save directly to Downloads folder (pywebview workaround - st.download_button doesn't work in WKWebView)
+                            downloads_path = Path.home() / "Downloads"
+                            downloads_path.mkdir(parents=True, exist_ok=True)
+                            
+                            # Handle duplicate filenames
+                            save_path = downloads_path / f"{safe_filename}.mp3"
+                            counter = 1
+                            while save_path.exists():
+                                save_path = downloads_path / f"{safe_filename}_{counter}.mp3"
+                                counter += 1
+                            
+                            # Write MP3 to Downloads folder
+                            with open(save_path, 'wb') as f:
+                                f.write(mp3_buffer.getvalue())
+                            
+                            st.success(f"✅ Mix saved to Downloads: **{save_path.name}**")
+                            st.info(f"📂 Location: `{str(save_path)}`")
                         else:
                             st.error("Failed to create mix.")
                     else:
