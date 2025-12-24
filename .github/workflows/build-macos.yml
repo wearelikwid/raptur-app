@@ -211,9 +211,10 @@ jobs:
     - name: Create distribution zip
       run: |
         cd dist
-        zip -r Raptur-macOS.zip Raptur.app
+        cp ../README.txt .
+        zip -r Raptur-macOS.zip Raptur.app README.txt
         mv Raptur-macOS.zip ../
-        echo "Created Raptur-macOS.zip"
+        echo "Created Raptur-macOS.zip with README.txt"
         ls -lh ../Raptur-macOS.zip
     
     - name: Upload artifact
