@@ -17,28 +17,8 @@ from pathlib import Path
 
 st.set_page_config(page_title="Raptur", page_icon="🎵", layout="wide")
 
-st.title("🎵 Raptur")
+st.title("Raptur")
 st.markdown("Upload - Mix - Download")
-
-with st.sidebar:
-    st.header("Get Raptur Desktop")
-    st.markdown("Run Raptur locally on your Mac - no internet needed!")
-    
-    raptur_zip_path = "Raptur.zip"
-    if os.path.exists(raptur_zip_path):
-        with open(raptur_zip_path, "rb") as zip_file:
-            st.download_button(
-                label="Download Raptur for macOS",
-                data=zip_file,
-                file_name="Raptur.zip",
-                mime="application/zip",
-                use_container_width=True
-            )
-        st.caption("Unzip and double-click Raptur.app to run")
-    else:
-        st.info("Desktop version coming soon!")
-    
-    st.divider()
 
 TARGET_LUFS = -14.0
 ANALYSIS_SR = 22050  # Lower sample rate for BPM/key/HPSS analysis (4x faster than 44100)
