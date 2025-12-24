@@ -86,7 +86,7 @@ def run_streamlit_server(app_path, port):
     
     bootstrap.run(
         app_path,
-        "streamlit run",
+        False,
         [],
         flag_options
     )
