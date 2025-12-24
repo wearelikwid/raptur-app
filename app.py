@@ -645,14 +645,14 @@ def process_uploaded_files(uploaded_files, progress_bar, status_text):
     for i, uploaded_file in enumerate(uploaded_files):
         progress = (i + 1) / len(uploaded_files) * 0.5
         progress_bar.progress(progress)
-        status_text.text(f"Processing: {uploaded_file.name}")
+        status_text.text(f"Analyzing track {i + 1} of {len(uploaded_files)}...")
         
         input_path = os.path.join(temp_dir, f"input_{i}_{uploaded_file.name}")
         with open(input_path, 'wb') as f:
             f.write(uploaded_file.getbuffer())
         
         try:
-            status_text.text(f"Processing & grid-locking: {uploaded_file.name}")
+            status_text.text(f"Processing track {i + 1} of {len(uploaded_files)}...")
             y_sanitized, sr, bpm, key, intro_safe_sec, outro_safe_sec, intro_segment, tail_segment = load_and_sanitize(input_path)
             
             duration = y_sanitized.shape[1] / sr if y_sanitized.ndim > 1 else len(y_sanitized) / sr
@@ -780,7 +780,7 @@ def create_streaming_mix(tracks_metadata, target_bpm, progress_callback=None):
                 mixed_left = y_stretched[0].astype(np.float32)
                 mixed_right = y_stretched[1].astype(np.float32)
             if progress_callback:
-                progress_callback(f"Mixing track {i+1}/{len(tracks_metadata)}: {track_meta['name']}")
+                progress_callback(f"Mixing track {i+1} of {len(tracks_metadata)}...")
         else:
             prev_track = tracks_metadata[i - 1]
             track_a_outro = prev_track.get('outro_safe_sec', 8.0)
@@ -807,7 +807,7 @@ def create_streaming_mix(tracks_metadata, target_bpm, progress_callback=None):
                 transition_log.append(f"{track_meta['name']}: {transition_beats}-beat DRUM SWAP [forced] (safe zone only {natural_beats} beats)")
             
             if progress_callback:
-                progress_callback(f"Mixing {track_meta['name']} ({transition_beats}-beat {transition_mode})...")
+                progress_callback(f"Mixing track {i+1} of {len(tracks_metadata)}...")
             
             overlap_samples = min(transition_samples, len(mixed_left), len(y_stretched[0]))
             
@@ -1075,11 +1075,6 @@ if uploaded_files:
                             
                             total_duration = sum(t['duration'] for t in tracks_metadata)
                             st.write(f"📊 **Mix Stats:** {len(tracks_metadata)} tracks | {total_duration/60:.1f} min total source | Target: {average_bpm:.1f} BPM | Volume: -14 LUFS")
-                            
-                            if transition_log:
-                                with st.expander("🎚️ Transition Effects Used"):
-                                    for transition in transition_log:
-                                        st.write(f"• {transition}")
                             
                             safe_filename = "".join(c for c in safe_mix_name if c.isalnum() or c in (' ', '-', '_')).strip()
                             if not safe_filename:
