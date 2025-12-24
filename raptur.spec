@@ -239,7 +239,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='Raptur.app',
-    icon=None,
+    icon='app.icns',
     bundle_identifier='com.raptur.app',
     info_plist={
         'NSHighResolutionCapable': True,
