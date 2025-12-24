@@ -916,10 +916,19 @@ def cleanup_temp_files(tracks_metadata, temp_dir):
 
 uploaded_files = st.file_uploader(
     "Upload MP3/WAV files",
-    type=['mp3', 'wav'],
     accept_multiple_files=True,
     help="Select multiple audio files to create a continuous mix"
 )
+
+# Filter uploaded files to only allow MP3/WAV (fixes WKWebView accept attribute bug on macOS)
+if uploaded_files:
+    valid_files = [f for f in uploaded_files if f.name.lower().endswith(('.mp3', '.wav'))]
+    invalid_files = [f.name for f in uploaded_files if not f.name.lower().endswith(('.mp3', '.wav'))]
+    
+    if invalid_files:
+        st.warning(f"⚠️ Skipped invalid file type(s): {', '.join(invalid_files)}. Only MP3 and WAV files are supported.")
+    
+    uploaded_files = valid_files
 
 if uploaded_files:
     st.info(f"📁 {len(uploaded_files)} file(s) uploaded")
@@ -937,9 +946,11 @@ if uploaded_files:
     with col2:
         artwork_file = st.file_uploader(
             "Album Artwork (optional)",
-            type=['jpg', 'jpeg', 'png'],
             help="Cover art to embed in your MP3"
         )
+        if artwork_file and not artwork_file.name.lower().endswith(('.jpg', '.jpeg', '.png')):
+            st.warning("Please upload a JPG or PNG image for artwork.")
+            artwork_file = None
         if artwork_file:
             try:
                 artwork_file.seek(0)
