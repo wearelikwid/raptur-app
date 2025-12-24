@@ -17,6 +17,14 @@ from pathlib import Path
 
 st.set_page_config(page_title="Raptur", page_icon="🎵", layout="wide")
 
+st.markdown("""
+<style>
+    [data-testid="stToolbar"] {visibility: hidden;}
+    #MainMenu {visibility: hidden;}
+    header {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
+
 st.title("Raptur")
 st.markdown("Upload - Mix - Download")
 
