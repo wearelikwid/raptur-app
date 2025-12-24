@@ -151,15 +151,8 @@ for pkg in ['numpy', 'scipy']:
     except Exception as e:
         print(f"Warning: Could not collect {pkg}: {e}")
 
-# Collect PIL/Pillow carefully (prone to X11 issues)
-try:
-    pillow_datas = collect_data_files('PIL')
-    pillow_binaries = collect_dynamic_libs('PIL')
-    all_datas += pillow_datas
-    all_binaries += filter_x11_binaries(pillow_binaries)
-    all_hiddenimports += ['PIL', 'PIL.Image', 'PIL.ImageDraw', 'PIL.ImageFont']
-except Exception as e:
-    print(f"Warning: Could not collect PIL: {e}")
+# PIL/Pillow removed - was only used for logo display
+# Removing it eliminates the libxcb dependency issue on macOS
 
 # Collect pywebview
 try:
