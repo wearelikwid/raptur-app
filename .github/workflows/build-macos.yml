@@ -18,7 +18,7 @@ jobs:
     
     - name: Install Homebrew dependencies
       run: |
-        brew install ffmpeg rubberband
+        brew install rubberband
     
     - name: Install Python dependencies
       run: |
@@ -26,17 +26,55 @@ jobs:
         pip install -r requirements.txt
         pip install pyinstaller>=6.17.0
     
+    - name: Download static ffmpeg binary
+      run: |
+        echo "=== Downloading static ffmpeg ==="
+        mkdir -p native_bins
+        
+        # Detect architecture
+        ARCH=$(uname -m)
+        echo "Detected architecture: $ARCH"
+        
+        if [ "$ARCH" = "arm64" ]; then
+          echo "Downloading ARM64 ffmpeg from martin-riedl.de..."
+          FFMPEG_URL="https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/snapshot/ffmpeg.zip"
+        else
+          echo "Downloading Intel x86_64 ffmpeg from evermeet.cx..."
+          FFMPEG_URL="https://evermeet.cx/ffmpeg/get/zip"
+        fi
+        
+        # Download and extract
+        cd native_bins
+        curl -JL -o ffmpeg.zip "$FFMPEG_URL"
+        unzip -o ffmpeg.zip
+        rm ffmpeg.zip
+        
+        # Verify ffmpeg exists
+        if [ ! -f ffmpeg ]; then
+          echo "ERROR: ffmpeg binary not found after extraction"
+          ls -la
+          exit 1
+        fi
+        
+        chmod +x ffmpeg
+        
+        # Remove quarantine attribute and code-sign
+        xattr -dr com.apple.quarantine ffmpeg 2>/dev/null || true
+        codesign -s - ffmpeg 2>/dev/null || true
+        
+        echo "ffmpeg ready:"
+        ls -la ffmpeg
+        ./ffmpeg -version | head -5
+        cd ..
+    
     - name: Stage native binaries for bundling
       run: |
         echo "=== Staging native binaries ==="
-        mkdir -p native_bins
         mkdir -p native_libs
         
         BREW_PREFIX=$(brew --prefix)
         
-        # Copy main executables
-        cp "$BREW_PREFIX/bin/ffmpeg" native_bins/
-        cp "$BREW_PREFIX/bin/ffprobe" native_bins/
+        # Add rubberband binary (ffmpeg is already in native_bins)
         cp "$BREW_PREFIX/bin/rubberband" native_bins/
         
         echo "Staged executables:"
@@ -54,22 +92,24 @@ jobs:
           fi
         }
         
-        # Copy core audio libraries
+        # Copy core audio libraries for rubberband
         for pattern in librubberband libsndfile libsamplerate libFLAC libogg libvorbis libopus libmp3lame libfftw; do
           for lib in "$BREW_PREFIX"/lib/${pattern}*.dylib; do
             copy_lib_with_deps "$lib"
           done
         done
         
-        # Get dependencies of ffmpeg and rubberband
-        for bin in native_bins/*; do
-          for dep in $(otool -L "$bin" 2>/dev/null | grep -E "$BREW_PREFIX" | awk '{print $1}'); do
-            copy_lib_with_deps "$dep"
-            # Also get transitive dependencies
-            for subdep in $(otool -L "$dep" 2>/dev/null | grep -E "$BREW_PREFIX" | awk '{print $1}'); do
-              copy_lib_with_deps "$subdep"
+        # Get dependencies of rubberband only (ffmpeg is static, no deps)
+        for bin in native_bins/rubberband; do
+          if [ -f "$bin" ]; then
+            for dep in $(otool -L "$bin" 2>/dev/null | grep -E "$BREW_PREFIX" | awk '{print $1}'); do
+              copy_lib_with_deps "$dep"
+              # Also get transitive dependencies
+              for subdep in $(otool -L "$dep" 2>/dev/null | grep -E "$BREW_PREFIX" | awk '{print $1}'); do
+                copy_lib_with_deps "$subdep"
+              done
             done
-          done
+          fi
         done
         
         echo "Staged libraries:"
