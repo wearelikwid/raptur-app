@@ -14,12 +14,10 @@ import io
 import gc
 import random
 from pathlib import Path
-from PIL import Image
 
 st.set_page_config(page_title="Raptur", page_icon="🎵", layout="wide")
 
-st.image("attached_assets/raptur blue purple logo.png", width=100)
-st.title("Raptur")
+st.title("🎵 Raptur")
 st.markdown("Upload - Mix - Download")
 
 with st.sidebar:
