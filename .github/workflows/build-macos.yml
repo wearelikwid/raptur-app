@@ -26,6 +26,42 @@ jobs:
         pip install -r requirements.txt
         pip install pyinstaller>=6.17.0
     
+    - name: Create macOS app icon (.icns)
+      run: |
+        echo "=== Creating macOS app icon ==="
+        
+        # Source PNG (should be at least 1024x1024)
+        SOURCE_PNG="attached_assets/app_icon.png"
+        
+        if [ ! -f "$SOURCE_PNG" ]; then
+          echo "Warning: app_icon.png not found, skipping icon creation"
+          exit 0
+        fi
+        
+        # Create iconset directory
+        mkdir -p Raptur.iconset
+        
+        # Generate all required sizes using sips (built into macOS)
+        sips -z 16 16     "$SOURCE_PNG" --out Raptur.iconset/icon_16x16.png
+        sips -z 32 32     "$SOURCE_PNG" --out Raptur.iconset/icon_16x16@2x.png
+        sips -z 32 32     "$SOURCE_PNG" --out Raptur.iconset/icon_32x32.png
+        sips -z 64 64     "$SOURCE_PNG" --out Raptur.iconset/icon_32x32@2x.png
+        sips -z 128 128   "$SOURCE_PNG" --out Raptur.iconset/icon_128x128.png
+        sips -z 256 256   "$SOURCE_PNG" --out Raptur.iconset/icon_128x128@2x.png
+        sips -z 256 256   "$SOURCE_PNG" --out Raptur.iconset/icon_256x256.png
+        sips -z 512 512   "$SOURCE_PNG" --out Raptur.iconset/icon_256x256@2x.png
+        sips -z 512 512   "$SOURCE_PNG" --out Raptur.iconset/icon_512x512.png
+        sips -z 1024 1024 "$SOURCE_PNG" --out Raptur.iconset/icon_512x512@2x.png
+        
+        # Convert to .icns using iconutil
+        iconutil -c icns Raptur.iconset -o app.icns
+        
+        echo "Created app.icns:"
+        ls -la app.icns
+        
+        # Cleanup
+        rm -rf Raptur.iconset
+    
     - name: Download static ffmpeg binary
       run: |
         echo "=== Downloading static ffmpeg ==="
